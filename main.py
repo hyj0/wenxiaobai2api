@@ -15,6 +15,9 @@ import hashlib
 import base64
 import hmac
 import re
+import requests_debugger
+
+requests_debugger.set(output_format=requests_debugger.CURL, max_depth=requests_debugger.MAX_DEPTH)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,7 +56,11 @@ class SessionManager:
         """如果需要，刷新会话"""
         if not self.is_initialized():
             self.initialize()
-
+    def get_session_json_str(self):
+        return json.dumps({"__SESSION0xFE819635__":{"device_id": self.device_id,
+                    "token": self.token,
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id}})
 
 # 创建会话管理器实例
 session_manager = SessionManager()
@@ -297,7 +304,7 @@ async def process_message_event(data: dict, is_first_chunk: bool, in_thinking_bl
         chunk = create_chunk(
             sse_id=sse_id,
             created=created,
-            content="<think>\n\n" + web_search_content,
+            content="<think>__SESSION0xFE819635__\n\n" + web_search_content,
             is_first=is_first_chunk
         )
         result = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
@@ -382,6 +389,22 @@ async def generate_response(messages: List[dict], model: str, temperature: float
                             max_tokens: Optional[int] = None, presence_penalty: float = 0,
                             frequency_penalty: float = 0, top_p: float = 1.0) -> AsyncGenerator[str, None]:
     """生成响应 - 使用真正的流式处理"""
+    # new session or not
+    has_session = False
+    for i in range(len(messages)):
+        msg = messages[len(messages) - 1 - i]
+        if "role" in msg.keys():
+            if msg['role'] != "assistant":
+                continue
+            content = msg["content"]
+            if content.find("__SESSION0xFE819635__") >= 0:
+                has_session = True
+                msg["content"] = content.replace("__SESSION0xFE819635__", "")
+
+    if not has_session:
+        logger.info("new session!")
+        session_manager.initialize()
+
     # 确保会话已初始化
     await session_manager.refresh_if_needed()
 
@@ -644,7 +667,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: str = 
                             content_part = delta["content"]
 
                             # 处理思考块标记
-                            if content_part == "<think>\n\n":
+                            if content_part == "<think>__SESSION0xFE819635__\n\n":
                                 in_thinking = True
                                 continue
                             elif content_part == "\n</think>\n\n":
@@ -672,7 +695,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: str = 
             "choices": [{
                 "message": {
                     "role": "assistant",
-                    "reasoning_content": f"<think>\n{thinking_content}\n</think>" if thinking_content else None,
+                    "reasoning_content": f"<think>__SESSION0xFE819635__\n{thinking_content}\n</think>" if thinking_content else None,
                     "content": content,
                     "meta": meta
                 },
