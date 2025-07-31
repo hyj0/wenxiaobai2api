@@ -14,6 +14,7 @@ import logging
 import hashlib
 import base64
 import hmac
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -274,9 +275,15 @@ def create_chunk(sse_id: str, created: int, content: Optional[str] = None,
 
 
 async def process_message_event(data: dict, is_first_chunk: bool, in_thinking_block: bool,
-                                thinking_started: bool, thinking_content: list) -> Tuple[str, bool, bool, bool, list]:
+                                thinking_started: bool, thinking_content: list, web_search_content: str, web_search_link_map: map) -> Tuple[str, bool, bool, bool, list]:
     """处理消息事件"""
     content = data.get("content", "")
+    pattern = r'\[(\d+)\]\(@ref\)'
+    matches = re.findall(pattern, content)
+    for n in matches:
+        url = web_search_link_map [n]
+        content = content.replace (f"[{n}](@ref)", f"[{n}]({url})")
+
     timestamp = data.get("timestamp", "")
     created = int(timestamp) // 1000 if timestamp else int(time.time())
     sse_id = data.get('sseId', str(uuid.uuid4()))
@@ -290,7 +297,7 @@ async def process_message_event(data: dict, is_first_chunk: bool, in_thinking_bl
         chunk = create_chunk(
             sse_id=sse_id,
             created=created,
-            content="<think>\n\n",
+            content="<think>\n\n" + web_search_content,
             is_first=is_first_chunk
         )
         result = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
@@ -411,6 +418,32 @@ async def generate_response(messages: List[dict], model: str, temperature: float
                 'defaultPlaceholder': '',
                 '_id': 'deep_think',
             },
+            {
+                "icon": "https://wy-static.wenxiaobai.com/bot-capability/prod/fastsearch.png",
+                "title": "日常搜索",
+                "defaultQuery": "",
+                "capability": "otherBot",
+                "capabilityRang": 0,
+                "minAppVersion": "",
+                "botId": 200007,
+                "botDesc": "即时获取最新信息",
+                "selectedIcon": "https://wy-static.wenxiaobai.com/bot-capability/prod/fastsearch_active.png",
+                "botIcon": "https://platform-dev-1319140468.cos.ap-nanjing.myqcloud.com/bot/avatar/2025/02/06/612cbff8-51e6-4c6a-8530-cb551bcfda56.webp",
+                "exclusiveCapabilities": [
+                    "file",
+                    "camera",
+                    "image"
+                ],
+                "defaultSelected": True,
+                "defaultHidden": False,
+                "key": "quick_search",
+                "defaultPlaceholder": "",
+                "isPromptMenu": False,
+                "subCapabilities": None,
+                "promptMenu": False,
+                "_is_new_tag": False,
+                "web_beta": ""
+            }
         ],
         'attachmentInfo': {
             'url': {
@@ -444,13 +477,15 @@ async def generate_response(messages: List[dict], model: str, temperature: float
                 in_thinking_block = False
                 thinking_content = []
                 thinking_started = False
+                web_search_content = ""
+                web_search_link_map = {}
 
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line:
                         current_event = None
                         continue
-
+                    print(line)
                     # 解析事件类型
                     if line.startswith("event:"):
                         current_event = line[len("event:"):].strip()
@@ -460,12 +495,64 @@ async def generate_response(messages: List[dict], model: str, temperature: float
                     elif line.startswith("data:"):
                         json_str = line[len("data:"):].strip()
                         try:
+                            '''
+                            event:opened
+data:{"querySentenceId":"ba19b0a9-4ad9-4b05-94f4-27fef8ce98a3","turnId":"aa2e2e75-f179-41ac-b81f-072e0ebce8e8","timestamp":"1744605113347","conversationId":"37192559-cf33-4409-acaf-b094112ab3a8","sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","queryTime":"2025-04-14T12:31:53.34642121","answerSentenceId":"65032a52-2f30-46e6-81d2-a4bb482ffe6b"}
+
+event:onlineSearch
+data:{"sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","content":{"details":[{"stage":"thoughtDetail","title":"这是个生活领域的事实查询任务，问题比较简单，我可以直接回答。","content":"这是个生活领域的事实查询任务，问题比较简单，我可以直接回答。"}]}}
+
+event:onlineSearch
+data:{"sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","content":{"details":[{"stage":"search","title":"正在联网搜索","content":""}]}}
+
+event:onlineSearch
+data:{"sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","content":{"details":[{"stage":"webSearchKeywords","title":"3个搜索关键词","content":["深圳 今日天气","深圳 2025年4月14日 天气预报","深圳 晴雨表 今天"]}]}}
+
+event:webSearch
+data:{"sub_type":"webSearch","sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","type":"ClientEvent","content":"全网收集资料中"}
+
+event:webSearch
+data:{"sub_type":"webSearch","sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","type":"ClientEvent","content":"分析海量数据中"}
+
+event:webSearchDetail
+data:{"sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","content":{"title":"为您检索到56篇内容","details":[{"id":"6da1b9df-1fef-49db-96c8-745b3018e5c0","index":"1","title":"深圳市气象局（台）","url":"https://weather.sz.gov.cn/","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/7568097852743828524.ico","hostName":"深圳市气象局","summary":"深圳市气象局门户网站为您提供权威、及时、准确的深圳天气预警、天气预报、天气实况、台风路径、深圳气候等信息服务，为深圳及其周边城市的生产生活提供全面可靠的气象服务","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"98f9bb86-08d6-4f3f-93a2-53f99f5fe35b","index":"2","title":"深圳7天天气详情","url":"https://tianqi.2345.com/today-59493.htm","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/14986605679644698667.ico","hostName":"2345天气预报","summary":"2345天气预报为您提供深圳24小时天气详情、深圳今日 天气预报，包括实时温度、风力风向、空气质量、湿度、气压、降水概率、紫外线强度等，每小时更新一次！ 输入城市、乡镇、街道、景点名称 ...","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"b1a8ac78-37bb-4fce-862d-6168747f9f25","index":"3","title":"天气实况与预报","url":"https://weather.sz.gov.cn/qixiangfuwu/yubaofuwu/jinmingtianqiyubao/index.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/7568097852743828524.ico","hostName":"深圳市气象局","summary":"深圳市气象局门户网站为您提供权威、及时、准确的深圳天气预警、天气预报、天气实况、台风路径、深圳 气候等信息服务，为深圳及其周边城市的生产生活提供全面可靠的气象服务 网站支持IPv6 繁體 English 手机版 数据开放 无障碍阅读 ...","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"9b7a0b8c-f58e-44bb-bb21-d69b97742719","index":"4","title":"深圳天气","url":"https://www.tianqi.com/shenzhen/today/","hostLogo":"","hostName":"","summary":"深圳天气网为您提供深圳天气预报24小时详情、深圳今日天气预报，包括今日实时温度、24小时降水概率、湿度、pm2.5 、风向、紫外线强度等，助您放心出行。 天气网提供全国国内城市天气预报，旅游景点天气预报，国际城市天气预报以及历史 ...","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"6c00bd23-f486-44dd-a222-eda5c972a3b2","index":"5","title":"http://www.nmc.cn/publish/forecast/AGD/shenzuo.html","url":"http://www.nmc.cn/publish/forecast/AGD/shenzuo.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/4109805565254913874.ico","hostName":"中央气象台","summary":"全球天气公报 全球热带气旋监测公报 WMO第XI海区海事天气公报 国外农业气象监测与作物展望 全球灾害性天气监测月报 全球雨雪落区预报 世界气象中心（北京）门户网 一带一路气象服务 亚洲沙尘暴预报专业气象中心","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"2724ba85-a086-4d0f-9b7a-cdcb7d64f56b","index":"6","title":"深圳今天将出现强对流和大风降温天气 防范强雷电和短时大风 铁路部分普速列车停运","url":"https://m.163.com/dy/article/JSUFMJPD0514R9KQ.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/16426760574136675243.ico","hostName":"网易","summary":"深圳今天将出现强对流和大风降温天气 防范强雷电和短时大风 铁路部分普速列车停运,大风,铁路,雷电,气象台,强对流,强雷雨,高温天气","type":"","cTime":"2025-04-12","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-12"},{"id":"12fb89c0-b783-4c52-bef7-5275c9b7e42f","index":"7","title":"最大阵风10级左右，深圳天气黄色“双预警”","url":"http://cj.sina.cn/articles/view/1686546714/6486a91a02002qmd4?finpagefr=p_104","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/5934584009833329958.ico","hostName":"新浪财经","summary":"来源：深圳卫视深视新闻 请注意 深圳市雷雨大风黄色 和暴雨黄色预警信号 正在生效中 【深圳市雷雨大风黄色和暴雨黄色预警信号】深圳市气象台2025年04月12日14时35分发布全市暴雨黄色和雷雨大风黄色预警信号，目前...来源/深圳天气","type":"","cTime":"2025-04-13","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-13"},{"id":"bb740f6d-e759-4d42-ae33-22c35c300525","index":"8","title":"雷雨+9级大风！本周六，深圳将迎来强对流天气！","url":"http://cj.sina.cn/articles/view/1789681642/6aac5fea02701em40?finpagefr=p_104","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/5934584009833329958.ico","hostName":"新浪财经","summary":"深圳这两天的天气如何呢？4月10日—11日：阴天间多云，间中有分散阵雨，天气暖湿，早晚有（轻）雾，气温21℃—28℃；4月12日：受冷暖气流交汇影响，深圳市较大可能有强雷雨大风天气，最大阵风9级以上，气温20℃—25℃，4月12日...","type":"","cTime":"2025-04-12","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-12"},{"id":"8e22b153-0661-4ae8-8067-33f27b781b55","index":"9","title":"天气实况与预报","url":"https://weather.sz.gov.cn/mobile/qixiangfuwu/yubaofuwu/jinmingtianqiyubao/index.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/7568097852743828524.ico","hostName":"深圳市气象局","summary":"多云；气温13-18℃；东北风3级，沿海、高地和海区阵风6级；相对湿度50%-80%。 loading. 湿度%. loading. 日雨量mm. loading. 风向. loading. 风速级.","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"38fa174e-0078-42de-afe2-47702aa25d9f","index":"10","title":"深圳2024年04月天气历史记录","url":"https://www.wentian123.com/guangdong/shenzhen/202404.htm","hostLogo":"","hostName":"","summary":"为你提供快速准确的深圳市天气历史记录,2024年04月的天气记录和气象趋势追踪,主要指标包括每天最高气温、最低气温、天气状况、风向等...","type":"","cTime":"2025-04-07","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-07"},{"id":"9631cf02-d565-4aa0-973c-3822d936f57d","index":"11","title":"2025年4月14日，深圳市：阴天转多云，适合出行","url":"https://www.sohu.com/a/883629363_121976704/","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/7928926881863082255.ico","hostName":"搜狐","summary":"2025年4月14日，深圳市的天气将以阴天开始，随后转为多云。上午的气温在22到24度之间，适合出行。上下班高峰时间，预计交通较为顺畅，但由于天气阴沉，建议 ...","type":"","cTime":"2025-04-13","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-13"},{"id":"da4c0b70-a832-4fd3-94a5-ced6ec70625d","index":"12","title":"【深圳天气】深圳天气预报,蓝天,蓝天预报,雾霾,雾霾消散,天气预报一周,天气预报15天查询","url":"https://www.weather.com.cn/html/weather/101280601.shtml","hostLogo":"","hostName":"","summary":"深圳天气预报，及时准确发布中央气象台天气信息，便捷查询深圳今日天气，深圳周末天气，深圳一周天气预报，深圳蓝天预报，深圳天气预报，深圳40日天气预报，还提供深圳的生活指数、健康指数、交通指数、旅游指数，及时发布深圳气象预警信号、各类气象资讯。","type":"","cTime":"2025-04-11","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-11"},{"id":"14eec698-c29a-47a1-b350-f30bd369ae55","index":"13","title":"深圳天气","url":"https://m.cncn.com/tianqi/shenzhen","hostLogo":"","hostName":"","summary":"多云22 ~ 28 ℃04月11日<3级,无持续风向深圳天气预报04/11 今天 多云 22~28℃ 04/12 明天 大雨转雷阵雨 17~25℃ 04/13 周日 晴 16~25℃ 04/14 周一 晴 17~28℃ 04/15 周二 多...","type":"","cTime":"2025-04-11","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-11"},{"id":"7ebe6e4a-b547-482b-9810-f6a7dd806967","index":"14","title":"深圳市","url":"https://weather.sz.gov.cn/mobile/?ad_check=1","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/7568097852743828524.ico","hostName":"深圳市气象局","summary":"03/28 深圳市气象局关于征求地方标准《高层建筑雷电防护装置维护保养及检测规程》（征求意见稿）意见的通告 常见问题3/29 你好，2024年深圳市光明区全年降雨天数多少天...","type":"","cTime":"2025-04-06","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2025-04-06"},{"id":"e376b6dd-827e-40a7-a365-6c8b3fab02e5","index":"15","title":"深圳光明：打造城市治理中的“晴雨表”","url":"https://cn.chinadaily.com.cn/a/202003/30/WS5e819c37a3107bb6b57a990f.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/15750544434798585462.ico","hostName":"中国日报网","summary":"面临错综复杂的治理环境，这份“晴雨表”能抽丝剥茧，从海量数据中提取关键信息，最终实现城市全状态实时化和可视化、城市管理决策协同化和智能化，驱动城市管理 ...","type":"","cTime":"2020-03-30","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":"2020-03-30"},{"id":"1f159ee6-c88d-48bf-8285-5b379ec042a2","index":"16","title":"广东省, 深圳市 天气预报 | MSN 天气","url":"https://www.msn.cn/zh-cn/weather/forecast/in-%E5%B9%BF%E4%B8%9C%E7%9C%81,%E6%B7%B1%E5%9C%B3%E5%B8%82?loc=eyJsIjoi56aP55Sw5Yy6IiwiciI6IuW5v%2BS4nOecgSIsInIyIjoi5rex5Zyz5biCIiwiYyI6IuS4reWNjuS6uuawkeWFseWSjOWbvSIsImkiOiJDTiIsImciOiJ6aC1jbiIsIngiOiIxMTQuMDU4IiwieSI6IjIyLjU0NCJ9&weadegreetype=C","hostLogo":"","hostName":"","summary":"使用 MSN 天气 获取 广东省, 深圳市, 福田区 今天、晚上和明天的每小时准确预测，以及 10 天每日预测和天气雷达。随时了解降水、严重天气警告、空气质量和野火警报。 想要查看其他位置? 请在此处输入它 主题 ‎°C 广东省, 深圳市,...","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"bd1763dd-479c-4e15-9764-457cc07fdbde","index":"17","title":"深圳天气预报,深圳7天天气预报,深圳15天天气预报,深圳天气查询","url":"https://www.weather.com.cn/weather/101280601.shtml","hostLogo":"","hostName":"","summary":"深圳天气预报，及时准确发布中央气象台天气信息，便捷查询深圳今日天气，深圳周末天气，深圳一周天气预报，深圳蓝天预报，深圳天气预报，深圳40日天气预报，还提供深圳的生活指数、健康指数、交通指数、旅游指数，及时发布深圳气象预警信号、各类气象资讯。","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"f48f3844-2b31-41fb-99fb-10607c63976c","index":"18","title":"深圳-天气预报 - 中央气象台","url":"http://www.nmc.cn/publish/forecast/AGD/shenzuo.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/4109805565254913874.ico","hostName":"中央气象台","summary":"11:00 · 29.2℃. 3.1m/s. 东北风. 1009.4hPa ; 14:00 · 29.8℃. 3.3m/s. 东北风. 1007hPa ; 17:00 · 28.4℃. 3.2m/s. 南风. 1006.1hPa.","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"82ed1ff7-e792-4b95-9ef1-1460985a61b2","index":"19","title":"深圳雷达图 - 中国天气网","url":"https://www.weather.com.cn/weather1d/101280601.shtml","hostLogo":"","hostName":"","summary":"气温倒挂！今天北方气温回升率先转为偏暖南方阴雨继续气温低迷. 今天（3月31日），北方气温率先回升至较常年偏高，而南方伴随 ...","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""},{"id":"23245ddc-6e19-41b1-b3ca-22c8e4634228","index":"20","title":"深圳 - 中国气象局-天气预报-城市预报","url":"https://weather.cma.cn/web/weather/59493.html","hostLogo":"https://wy-static.wenxiaobai.com/website/icon/17573544513683138180.ico","hostName":"中国气象局","summary":"星期日 04/13 · 22℃. 17℃ ; 星期一 04/14 · 27℃. 18℃ ; 星期二 04/15 · 30℃. 19℃ ; 星期三 04/16 · 28℃. 20℃ ; 星期四 04/17 · 28℃. 23℃.","type":"","cTime":"","pdfHtmlUrl":"","pdfPublishInfo":"","pdfPublishYear":"","pdfCitedCount":0,"ctime":""}],"totalCount":56,"source":"日常搜索","sourceIcon":"https://wy-static.wenxiaobai.com/bot-capability/prod/fastsearch_active.png"}}
+
+event:webSearch
+data:{"sub_type":"webSearch","sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","type":"ClientEvent","content":"精细整理优化中"}
+
+event:message
+data:{"contentIndex":11,"timestamp":"1744605119355","sseId":"f092ee67-466a-487c-9bab-0acdb953eb8f","content":"```ys_think\n\n<icon>https://wy-static.wenxiaobai.com/bot-capability/prod/%E6%B7%B1%E5%BA%A6%E6%80%9D%E8%80%83.png</icon>\n\n<start>思考中...</start>\n\n嗯"}
+                            '''
                             data = json.loads(json_str)
+                            if current_event == "onlineSearch":
+                                for i in data["content"]["details"]:
+                                    if i["stage"] == "webSearchKeywords":
+                                        web_search_content += i["title"] + ";"
+                                        for j in i["content"]:
+                                            web_search_content += j + ","
+                                        web_search_content += "\n"
+                                    else:
+                                        web_search_content += i["title"] + ";" + i["content"] + "\n"
+                            if current_event == "webSearch":
+                                web_search_content += data["content"] + "\n"
+                            if current_event == "webSearchDetail":
+                                for i in data["content"]["details"]:
+                                    index = i["index"]
+                                    title = i["title"]
+                                    url = i["url"]
+                                    hostName = i["hostName"]
+                                    summary = i["summary"]
+                                    web_search_content += f"[{index}]"
+                                    web_search_content += title + ";"
+                                    web_search_content += url + ";"
+                                    web_search_content += hostName + ";"
+                                    web_search_content += summary + "\n"
+                                    web_search_link_map[index] = url
 
                             # 处理消息事件
                             if current_event == "message":
                                 result, in_thinking_block, thinking_started, is_first_chunk, thinking_content = await process_message_event(
-                                    data, is_first_chunk, in_thinking_block, thinking_started, thinking_content
+                                    data, is_first_chunk, in_thinking_block, thinking_started, thinking_content, web_search_content, web_search_link_map
                                 )
                                 if result:
                                     yield result
