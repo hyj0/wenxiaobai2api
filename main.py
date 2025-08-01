@@ -554,8 +554,24 @@ data:{"contentIndex":11,"timestamp":"1744605119355","sseId":"f092ee67-466a-487c-
                                         for j in i["content"]:
                                             web_search_content += j + ","
                                         web_search_content += "\n"
+                                    elif i["stage"] == 'webSearchDetail':
+                                        for j in i["content"]["details"]:
+                                            index = j["index"]
+                                            title = j["title"]
+                                            url = j["url"]
+                                            hostName = j["hostName"]
+                                            summary = j["summary"]
+                                            web_search_content += f"[{index}]"
+                                            web_search_content += title + ";"
+                                            web_search_content += url + ";"
+                                            web_search_content += hostName + ";"
+                                            web_search_content += summary + "\n"
+                                            web_search_link_map[index] = url
                                     else:
-                                        web_search_content += i["title"] + ";" + i["content"] + "\n"
+                                        if isinstance(i["content"], str):
+                                            web_search_content += i["title"] + ";" + i["content"] + "\n"
+                                        elif isinstance(i["content"], dict):
+                                            web_search_content += i["title"] + ";" + str(i["content"]) + "\n"
                             if current_event == "webSearch":
                                 web_search_content += data["content"] + "\n"
                             if current_event == "webSearchDetail":
