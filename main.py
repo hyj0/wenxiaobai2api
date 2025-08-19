@@ -61,6 +61,12 @@ class SessionManager:
                     "token": self.token,
                     "user_id": self.user_id,
                     "conversation_id": self.conversation_id}})
+    def load_session(self, js):
+        js = js["__SESSION0xFE819635__"]
+        self.device_id = js["device_id"]
+        self.token = js["token"]
+        self.user_id = js["user_id"]
+        self.conversation_id = js["conversation_id"]
 
 # 创建会话管理器实例
 session_manager = SessionManager()
@@ -304,7 +310,7 @@ async def process_message_event(data: dict, is_first_chunk: bool, in_thinking_bl
         chunk = create_chunk(
             sse_id=sse_id,
             created=created,
-            content="<think>__SESSION0xFE819635__\n\n" + web_search_content,
+            content=f"<think>{session_manager.get_session_json_str()}\n\n" + web_search_content,
             is_first=is_first_chunk
         )
         result = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
@@ -397,14 +403,25 @@ async def generate_response(messages: List[dict], model: str, temperature: float
             if msg['role'] != "assistant":
                 continue
             content = msg["content"]
-            if content.find("__SESSION0xFE819635__") >= 0:
-                has_session = True
-                msg["content"] = content.replace("__SESSION0xFE819635__", "")
+            idx = content.find('{"__SESSION0xFE819635__"')
+            if idx >= 0:
+                ss = content[idx:]
+                end = ss.find('}}')
+                if end > 0:
+                    ss_str = ss[0:end + 2]
+                    print(ss_str)
+                    js = json.loads(ss_str)
+                    if not has_session:
+                        has_session = js
+                    content = content[0:idx] + content[idx + end + 2:]
+                    msg["content"] = content
 
     if not has_session:
         logger.info("new session!")
         session_manager.initialize()
-
+    else:
+        logger.info("load session" + has_session.__str__())
+        session_manager.load_session(has_session)
     # 确保会话已初始化
     await session_manager.refresh_if_needed()
 
@@ -683,7 +700,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: str = 
                             content_part = delta["content"]
 
                             # 处理思考块标记
-                            if content_part == "<think>__SESSION0xFE819635__\n\n":
+                            if content_part == f"<think>{session_manager.get_session_json_str()}\n\n":
                                 in_thinking = True
                                 continue
                             elif content_part == "\n</think>\n\n":
@@ -711,7 +728,7 @@ async def chat_completions(request: ChatCompletionRequest, authorization: str = 
             "choices": [{
                 "message": {
                     "role": "assistant",
-                    "reasoning_content": f"<think>__SESSION0xFE819635__\n{thinking_content}\n</think>" if thinking_content else None,
+                    "reasoning_content": f"<think>{session_manager.get_session_json_str()}\n{thinking_content}\n</think>" if thinking_content else None,
                     "content": content,
                     "meta": meta
                 },
